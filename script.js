@@ -251,6 +251,7 @@ class ColorApp {
         this.lastClipped = false;
         this.sliders = {};
         this.numberInputs = {};
+        this.pendingInputs = new Set();
         this.gradientCanvases = {};
 
         this.runTests();
@@ -269,35 +270,29 @@ class ColorApp {
             this.gradientCanvases[key] = canvas;
 
             slider.addEventListener('input', () => {
+                this.pendingInputs.delete(key);
                 number.value = slider.value;
                 this.onParamChange(model, comp, parseFloat(slider.value));
             });
 
+            number.title = 'Enter — применить; Esc — отменить. Выход из поля также применяет значение.';
             number.addEventListener('input', () => {
-                let val = parseFloat(number.value.replace(',', '.'));
-                if (isNaN(val)) return;
-                const min = parseFloat(slider.min);
-                const max = parseFloat(slider.max);
-                if (val < min) val = min;
-                if (val > max) val = max;
-                slider.value = val;
-                this.onParamChange(model, comp, val);
+                // Храним черновик в поле: не пересчитываем цвет во время набора.
+                this.pendingInputs.add(key);
             });
+            number.addEventListener('keydown', (event) => {
+                if (event.isComposing) return;
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    this.commitNumberInput(model, comp);
+                } else if (event.key === 'Escape') {
+                    event.preventDefault();
+                    this.pendingInputs.delete(key);
+                    this.restoreNumberInput(model, comp);
+                }
+            });
+            number.addEventListener('blur', () => this.commitNumberInput(model, comp));
 
-            number.addEventListener('blur', () => {
-                const min = parseFloat(slider.min);
-                const max = parseFloat(slider.max);
-                const range = max - min;
-                let val = parseFloat(number.value.replace(',', '.'));
-                if (isNaN(val)) val = parseFloat(slider.value);
-                if (val < min) val = min;
-                if (val > max) val = max;
-                const displayVal = (range >= 2)
-                    ? Math.round(val)
-                    : Math.round(val * 1000) / 1000;
-                number.value = displayVal;
-                slider.value = displayVal;
-            });
         });
 
         this.colorPicker.addEventListener('input', () => {
@@ -309,6 +304,47 @@ class ColorApp {
         this.setFromRgb(255, 0, 0, 'init');
         this.updateGradients();
         this.updateWarning();
+    }
+
+    getParamValue(model, comp) {
+        const stateComp = model === 'hsl' ? comp.toLowerCase() : comp;
+        return this.state[model][stateComp];
+    }
+
+    formatParamValue(value, slider) {
+        // Округляем только представление, не значения математического состояния.
+        const decimals = (slider.step.split('.')[1] || '').length;
+        return Number.isFinite(value) ? String(Number(value.toFixed(decimals))) : '0';
+    }
+
+    restoreNumberInput(model, comp) {
+        const key = model + '.' + comp;
+        this.numberInputs[key].value = this.formatParamValue(
+            this.getParamValue(model, comp), this.sliders[key]);
+    }
+
+    commitNumberInput(model, comp) {
+        const key = model + '.' + comp;
+        if (!this.pendingInputs.has(key)) return;
+        this.pendingInputs.delete(key);
+        const input = this.numberInputs[key];
+        const slider = this.sliders[key];
+        const raw = input.value.trim().replace(',', '.');
+        const parsed = Number(raw);
+        if (raw === '' || !Number.isFinite(parsed)) {
+            this.restoreNumberInput(model, comp);
+            this.warningDiv.textContent = 'Введите конечное число. Последний корректный цвет сохранён.';
+            return;
+        }
+        const value = Math.min(Number(slider.max), Math.max(Number(slider.min), parsed));
+        this.onParamChange(model, comp, value);
+        // После подтверждения показываем реально рассчитанное значение, в том числе
+        // после обрезания/масштабирования цвета за пределами охвата RGB.
+        this.restoreNumberInput(model, comp);
+        if (value !== parsed) {
+            this.warningDiv.textContent = `Значение ограничено диапазоном ${slider.min}–${slider.max}. `
+                + this.warningDiv.textContent;
+        }
     }
 
     runTests() {
@@ -360,23 +396,9 @@ class ColorApp {
             if (!this.sliders[key]) return;
             const slider = this.sliders[key];
             const numberInput = this.numberInputs[key];
-            const min = parseFloat(slider.min);
-            const max = parseFloat(slider.max);
-            const range = max - min;
-
-            let displayVal;
-            if (Number.isFinite(val)) {
-                displayVal = (range >= 2)
-                    ? Math.round(val)
-                    : Math.round(val * 1000) / 1000;
-            } else {
-                displayVal = 0;
-            }
-
-            slider.value = displayVal;
-
-            if (document.activeElement !== numberInput) {
-                numberInput.value = displayVal;
+            slider.value = val;
+            if (!this.pendingInputs.has(key)) {
+                numberInput.value = this.formatParamValue(val, slider);
             }
         };
         setParam('xyz', 'X', X);
@@ -409,14 +431,14 @@ class ColorApp {
             const y = (comp === 'Y') ? value : this.state.xyz.Y;
             const z = (comp === 'Z') ? value : this.state.xyz.Z;
             const rgbRes = Model.xyzToRgb(x, y, z, data.xyz2rgb, strategy);
-            newRgb = { r: rgbRes.r, g: rgbRes.g, b: rgbRes.b };
+            newRgb = { r: rgbRes.r, g: rgbRes.g, b: rgbRes.b, clipped: rgbRes.clipped };
         } else if (model === 'lab') {
             const L = (comp === 'L') ? value : this.state.lab.L;
             const a = (comp === 'a') ? value : this.state.lab.a;
             const b = (comp === 'b') ? value : this.state.lab.b;
             const xyz2 = Model.labToXyz(L, a, b, data.white);
             const rgbRes = Model.xyzToRgb(xyz2.X, xyz2.Y, xyz2.Z, data.xyz2rgb, strategy);
-            newRgb = { r: rgbRes.r, g: rgbRes.g, b: rgbRes.b };
+            newRgb = { r: rgbRes.r, g: rgbRes.g, b: rgbRes.b, clipped: rgbRes.clipped };
         } else if (model === 'hsl') {
             const h = (comp === 'H') ? value : this.state.hsl.h;
             const s = (comp === 'S') ? value : this.state.hsl.s;
