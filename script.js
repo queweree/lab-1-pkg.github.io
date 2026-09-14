@@ -345,12 +345,25 @@ class ColorApp {
         const { h, s, l } = this.state.hsl;
 
         const setParam = (model, comp, val) => {
-            const key = model + '.' + comp;
-            if (this.sliders[key]) {
-                this.sliders[key].value = val;
-                this.numberInputs[key].value = val;
-            }
-        };
+    const key = model + '.' + comp;
+    if (this.sliders[key]) {
+        const slider = this.sliders[key];
+        const min = parseFloat(slider.min);
+        const max = parseFloat(slider.max);
+        const range = max - min;
+        let displayVal;
+        if (Number.isFinite(val)) {
+            displayVal = (range >= 2)
+                ? Math.round(val)
+                : Math.round(val * 1000) / 1000;
+        } else {
+            displayVal = 0;
+        }
+
+        slider.value = displayVal;
+        this.numberInputs[key].value = displayVal;
+    }
+};
         setParam('xyz', 'X', X);
         setParam('xyz', 'Y', Y);
         setParam('xyz', 'Z', Z);
